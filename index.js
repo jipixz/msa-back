@@ -3,6 +3,15 @@ const cors = require('cors');
 const { SerialPort } = require('serialport');
 const path = require('path');
 const app = express();
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
 require('dotenv').config();
 
 // Servir archivos estáticos de la carpeta 'build'
@@ -42,12 +51,21 @@ try {
   console.log('⚠️ Funcionando en modo de almacenamiento en memoria');
 }
 
+// WebSocket connection
+io.on('connection', (socket) => {
+  console.log('🔌 Nuevo cliente conectado');
+  
+  socket.on('disconnect', () => {
+    console.log('🔌 Cliente desconectado');
+  });
+});
+
 // Configuración del puerto Serial
 let port;
 try {
   port = new SerialPort({
     path: process.env.USB_PORT || 'COM3', // Puerto predeterminado para Windows
-    baudRate: 9600,
+    baudRate: 115200,
   });
 
   port.on('data', async (data) => {
@@ -61,10 +79,17 @@ try {
         const nuevaLectura = new Humedad({ valor });
         await nuevaLectura.save();
         console.log(`💾 Humedad registrada en MongoDB: ${valor}`);
+        
+        // Emitir el nuevo dato a todos los clientes conectados
+        io.emit('nueva-lectura', { valor, fecha: nuevaLectura.fecha });
       } else {
-        datosHumedad.unshift({ valor, fecha: new Date() });
+        const nuevoDato = { valor, fecha: new Date() };
+        datosHumedad.unshift(nuevoDato);
         if (datosHumedad.length > 100) datosHumedad.pop(); // Mantener solo los últimos 100 registros
         console.log(`💾 Humedad registrada en memoria: ${valor}`);
+        
+        // Emitir el nuevo dato a todos los clientes conectados
+        io.emit('nueva-lectura', nuevoDato);
       }
     } else {
       console.warn('⚠️ Valor recibido no numérico:', str);
@@ -85,7 +110,8 @@ app.get('/api', (req, res) => {
     message: '¡Hola desde el backend!',
     status: {
       mongodb: !!Humedad ? 'conectado' : 'desconectado',
-      serialPort: !!port ? 'conectado' : 'desconectado'
+      serialPort: !!port ? 'conectado' : 'desconectado',
+      websocket: 'conectado'
     }
   });
 });
@@ -98,11 +124,19 @@ app.post('/api/humedad', async (req, res) => {
     if (Humedad) {
       const nueva = new Humedad({ valor });
       await nueva.save();
+      
+      // Emitir el nuevo dato a todos los clientes conectados
+      io.emit('nueva-lectura', { valor, fecha: nueva.fecha });
+      
       res.status(201).json(nueva);
     } else {
       const nueva = { valor, fecha: new Date() };
       datosHumedad.unshift(nueva);
       if (datosHumedad.length > 100) datosHumedad.pop();
+      
+      // Emitir el nuevo dato a todos los clientes conectados
+      io.emit('nueva-lectura', nueva);
+      
       res.status(201).json(nueva);
     }
   } catch (error) {
@@ -130,7 +164,7 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
 });
 
