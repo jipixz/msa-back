@@ -68,31 +68,47 @@ try {
     baudRate: 115200,
   });
 
+  let buffer = '';
+
   port.on('data', async (data) => {
-    const str = data.toString().trim();
-    const valor = parseInt(str, 10);
-    if (!isNaN(valor)) {
-      console.log(`📡 Dato recibido: ${valor}`);
+    // Añadir los datos recibidos al buffer
+    buffer += data.toString();
+    
+    // Buscar líneas completas en el buffer
+    let lines = buffer.split('\n');
+    
+    // Si tenemos al menos una línea completa (terminada en \n)
+    if (lines.length > 1) {
+      // La última línea podría estar incompleta, se guarda para el próximo procesamiento
+      buffer = lines.pop();
       
-      // Guardar en MongoDB si está disponible, o en memoria si no
-      if (Humedad) {
-        const nuevaLectura = new Humedad({ valor });
-        await nuevaLectura.save();
-        console.log(`💾 Humedad registrada en MongoDB: ${valor}`);
+      for (const line of lines) {
+        // Buscar el patrón "Humedad: XX%" usando expresión regular
+        const match = line.match(/Humedad:\s+(\d+)%/);
         
-        // Emitir el nuevo dato a todos los clientes conectados
-        io.emit('nueva-lectura', { valor, fecha: nuevaLectura.fecha });
-      } else {
-        const nuevoDato = { valor, fecha: new Date() };
-        datosHumedad.unshift(nuevoDato);
-        if (datosHumedad.length > 100) datosHumedad.pop(); // Mantener solo los últimos 100 registros
-        console.log(`💾 Humedad registrada en memoria: ${valor}`);
-        
-        // Emitir el nuevo dato a todos los clientes conectados
-        io.emit('nueva-lectura', nuevoDato);
+        if (match && match[1]) {
+          const valor = parseInt(match[1], 10);
+          console.log(`📡 Porcentaje de humedad detectado: ${valor}%`);
+          
+          // Guardar en MongoDB si está disponible, o en memoria si no
+          if (Humedad) {
+            const nuevaLectura = new Humedad({ valor });
+            await nuevaLectura.save();
+            console.log(`💾 Humedad registrada en MongoDB: ${valor}%`);
+            
+            // Emitir el nuevo dato a todos los clientes conectados
+            io.emit('nueva-lectura', { valor, fecha: nuevaLectura.fecha });
+          } else {
+            const nuevoDato = { valor, fecha: new Date() };
+            datosHumedad.unshift(nuevoDato);
+            if (datosHumedad.length > 100) datosHumedad.pop(); // Mantener solo los últimos 100 registros
+            console.log(`💾 Humedad registrada en memoria: ${valor}%`);
+            
+            // Emitir el nuevo dato a todos los clientes conectados
+            io.emit('nueva-lectura', nuevoDato);
+          }
+        }
       }
-    } else {
-      console.warn('⚠️ Valor recibido no numérico:', str);
     }
   });
 
