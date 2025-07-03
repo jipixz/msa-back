@@ -5,3 +5,5 @@ sshtunnel
 scikit-learn
 pandas
 python-dotenv
+requests
+matplotlib

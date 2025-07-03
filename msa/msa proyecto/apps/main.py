@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sshtunnel import SSHTunnelForwarder
@@ -11,18 +12,37 @@ import traceback
 import io
 import base64
 import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+from typing import List, Optional
+
+# Importar nuestros nuevos módulos
+from models import (
+    ProductionRecord, ProductionRecordCreate, ProductionRecordUpdate,
+    Parcel, ParcelCreate, ProductionStats, PredictionRequest
+)
+from production_service import production_service
+from prediction_service import prediction_service
 
 # Cargar variables desde datos.env
 load_dotenv("datos.env")
 
-app = FastAPI()
+app = FastAPI(title="MSA API", description="API para Monitoreo de Sensores Agrícolas")
 
-# Modelo para entrada de predicción, agregamos opción para graficar
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En producción, especificar los dominios permitidos
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Modelo para entrada de predicción (mantener compatibilidad)
 class EntradaPrediccion(BaseModel):
     horas_a_predecir: int
     graficar: bool = False
 
-# Función para conectarse y obtener los datos
+# Función para conectarse y obtener los datos (mantener compatibilidad)
 def obtener_datos(eliminar_id=True):
     try:
         ssh_host = os.getenv("SSH_HOST")
@@ -64,16 +84,14 @@ def obtener_datos(eliminar_id=True):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error de conexión a la base de datos.")
 
-# --- Ruta GET para obtener datos con _id como str ---
+# --- Rutas existentes (mantener compatibilidad) ---
 @app.get("/get_datos")
 def get_datos():
     try:
-        # Aquí no eliminamos _id
         df = obtener_datos(eliminar_id=False)
         if df.empty:
             raise HTTPException(status_code=404, detail="No se encontraron datos.")
         
-        # Convertir _id a string para que JSON sea válido
         if "_id" in df.columns:
             df["_id"] = df["_id"].astype(str)
 
@@ -83,7 +101,6 @@ def get_datos():
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al obtener datos: {str(e)}")
 
-# --- Ruta POST para predecir ---
 @app.post("/predecir")
 def predecir(data: EntradaPrediccion):
     try:
@@ -94,18 +111,11 @@ def predecir(data: EntradaPrediccion):
         if "fecha" not in df.columns or "valor" not in df.columns:
             raise HTTPException(status_code=500, detail="Columnas 'fecha' o 'valor' no encontradas.")
 
-        # Convertir columna fecha a datetime y limpiar filas inválidas
         df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
         df = df.dropna(subset=["fecha", "valor"])
-
-        # Establecer fecha como índice para usar resample
         df = df.set_index("fecha")
-
-        # Resamplear por hora, tomando promedio
         df = df.resample("H").mean()
-
-        # Preparar datos para el modelo de regresión
-        df = df.dropna(subset=["valor"])  # Eliminar horas sin valor
+        df = df.dropna(subset=["valor"])
         df["hora"] = np.arange(len(df))
         X = df[["hora"]]
         y = df["valor"]
@@ -152,3 +162,208 @@ def predecir(data: EntradaPrediccion):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error en la predicción: {str(e)}")
+
+# --- Nuevas rutas de producción ---
+@app.post("/production/records", response_model=ProductionRecord)
+async def create_production_record(record: ProductionRecordCreate):
+    """Crear un nuevo registro de producción"""
+    try:
+        return production_service.create_production_record(record)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/production/records", response_model=List[ProductionRecord])
+async def get_production_records(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    parcel: Optional[str] = None,
+    cacao_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """Obtener registros de producción con filtros opcionales"""
+    try:
+        # Convertir fechas si se proporcionan
+        start_dt = None
+        end_dt = None
+        if start_date:
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        if end_date:
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        
+        return production_service.get_production_records(
+            skip=skip,
+            limit=limit,
+            parcel=parcel,
+            cacao_type=cacao_type,
+            start_date=start_dt,
+            end_date=end_dt
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/production/records/{record_id}", response_model=ProductionRecord)
+async def get_production_record(record_id: str):
+    """Obtener un registro de producción por ID"""
+    try:
+        record = production_service.get_production_record_by_id(record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        return record
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/production/records/{record_id}", response_model=ProductionRecord)
+async def update_production_record(record_id: str, update_data: ProductionRecordUpdate):
+    """Actualizar un registro de producción"""
+    try:
+        record = production_service.update_production_record(record_id, update_data)
+        if not record:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        return record
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/production/records/{record_id}")
+async def delete_production_record(record_id: str):
+    """Eliminar un registro de producción"""
+    try:
+        success = production_service.delete_production_record(record_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        return {"message": "Registro eliminado exitosamente"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/production/parcels", response_model=Parcel)
+async def create_parcel(parcel: ParcelCreate):
+    """Crear una nueva parcela"""
+    try:
+        return production_service.create_parcel(parcel)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/production/parcels", response_model=List[Parcel])
+async def get_parcels():
+    """Obtener todas las parcelas"""
+    try:
+        return production_service.get_parcels()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/production/stats", response_model=ProductionStats)
+async def get_production_stats(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """Obtener estadísticas de producción"""
+    try:
+        # Convertir fechas si se proporcionan
+        start_dt = None
+        end_dt = None
+        if start_date:
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        if end_date:
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        
+        return production_service.get_production_stats(start_dt, end_dt)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Nuevas rutas de predicciones ---
+@app.post("/predictions/humidity")
+async def predict_humidity(request: PredictionRequest):
+    """Predicción de humedad"""
+    try:
+        result = prediction_service.predict_humidity(
+            hours_to_predict=request.hours_to_predict,
+            include_graph=request.include_graph
+        )
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/predictions/temperature")
+async def predict_temperature(days: int = Query(7, ge=1, le=30)):
+    """Predicción de temperatura"""
+    try:
+        result = prediction_service.predict_temperature(days)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/predictions/rainfall")
+async def predict_rainfall(days: int = Query(7, ge=1, le=30)):
+    """Predicción de lluvia"""
+    try:
+        result = prediction_service.predict_rainfall(days)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/predictions/soil-moisture")
+async def predict_soil_moisture(days: int = Query(7, ge=1, le=30)):
+    """Predicción de humedad del suelo"""
+    try:
+        result = prediction_service.predict_soil_moisture(days)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/predictions/alerts")
+async def get_weather_alerts():
+    """Obtener alertas meteorológicas"""
+    try:
+        result = prediction_service.get_weather_alerts()
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def root():
+    """Endpoint raíz con información de la API"""
+    return {
+        "message": "MSA API - Monitoreo de Sensores Agrícolas",
+        "version": "1.0.0",
+        "endpoints": {
+            "sensors": "/get_datos",
+            "predictions": {
+                "humidity": "/predictions/humidity",
+                "temperature": "/predictions/temperature",
+                "rainfall": "/predictions/rainfall",
+                "soil_moisture": "/predictions/soil-moisture",
+                "alerts": "/predictions/alerts"
+            },
+            "production": {
+                "records": "/production/records",
+                "parcels": "/production/parcels",
+                "stats": "/production/stats"
+            }
+        }
+    }
