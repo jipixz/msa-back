@@ -34,10 +34,18 @@ const datosProduccion = [];
 // Función para cargar datos desde archivo JSON
 const cargarDatosDesdeArchivo = () => {
   try {
+    // Cargar datos de producción
     if (fs.existsSync('./datos_produccion.json')) {
       const datos = JSON.parse(fs.readFileSync('./datos_produccion.json', 'utf8'));
       datosProduccion.push(...datos);
-      console.log(`📁 Cargados ${datos.length} registros desde archivo`);
+      console.log(`📁 Cargados ${datos.length} registros de producción desde archivo`);
+    }
+    
+    // Cargar datos de sensores
+    if (fs.existsSync('./datos_sensores.json')) {
+      const datosSensores = JSON.parse(fs.readFileSync('./datos_sensores.json', 'utf8'));
+      datosHumedad.push(...datosSensores);
+      console.log(`📁 Cargados ${datosSensores.length} registros de sensores desde archivo`);
     }
   } catch (error) {
     console.error('Error cargando datos desde archivo:', error);
@@ -48,14 +56,47 @@ const cargarDatosDesdeArchivo = () => {
 const guardarDatosAArchivo = () => {
   try {
     fs.writeFileSync('./datos_produccion.json', JSON.stringify(datosProduccion, null, 2));
-    console.log(`💾 Guardados ${datosProduccion.length} registros a archivo`);
+    fs.writeFileSync('./datos_sensores.json', JSON.stringify(datosHumedad, null, 2));
+    console.log(`💾 Guardados ${datosProduccion.length} registros de producción y ${datosHumedad.length} registros de sensores a archivo`);
   } catch (error) {
     console.error('Error guardando datos a archivo:', error);
   }
 };
 
+// Función para generar datos iniciales de sensores si no existen
+const generarDatosIniciales = () => {
+  if (datosHumedad.length === 0) {
+    console.log('📊 Generando datos iniciales de sensores...');
+    const ahora = new Date();
+    
+    // Generar 20 registros de las últimas 10 horas (cada 30 minutos)
+    for (let i = 19; i >= 0; i--) {
+      const fecha = new Date(ahora.getTime() - (i * 30 * 60 * 1000)); // 30 minutos atrás
+      
+      const registro = {
+        humedadSuelo: Math.round((Math.random() * 20 + 40) * 10) / 10, // 40-60%
+        temperaturaDS: Math.round((Math.random() * 10 + 20) * 10) / 10, // 20-30°C
+        temperaturaBME: Math.round((Math.random() * 10 + 22) * 10) / 10, // 22-32°C
+        presion: Math.round(Math.random() * 50 + 1000), // 1000-1050 hPa
+        humedadAire: Math.round((Math.random() * 30 + 50) * 10) / 10, // 50-80%
+        luminosidad: Math.round(Math.random() * 800 + 200), // 200-1000 lx
+        lluvia: Math.random() > 0.8 ? Math.round(Math.random() * 5 * 10) / 10 : 0, // 20% probabilidad de lluvia
+        alerta: Math.random() > 0.9, // 10% probabilidad de alerta
+        fecha: fecha,
+        __v: 0
+      };
+      
+      datosHumedad.push(registro);
+    }
+    
+    console.log(`✅ Generados ${datosHumedad.length} registros iniciales de sensores`);
+    guardarDatosAArchivo(); // Guardar los datos generados
+  }
+};
+
 // Cargar datos al iniciar
 cargarDatosDesdeArchivo();
+generarDatosIniciales();
 
 // Inicializar MongoDB si está disponible
 let mongoose;
@@ -153,6 +194,54 @@ io.on('connection', (socket) => {
 
 // Configuración del puerto Serial
 let port;
+// Buffer para acumular datos de sensores individuales
+let sensorDataBuffer = {};
+let lastSensorUpdate = Date.now();
+const SENSOR_TIMEOUT = 5000; // 5 segundos para completar todos los sensores
+
+// Función para guardar datos acumulados
+const saveAccumulatedData = async () => {
+  if (Object.keys(sensorDataBuffer).length > 0) {
+    const completeData = {
+      ...sensorDataBuffer,
+      fecha: new Date()
+    };
+    
+    console.log(`📡 Guardando datos acumulados:`, completeData);
+    
+    // Guardar en MongoDB si está disponible, o en memoria si no
+    if (Humedad) {
+      const nuevaLectura = new Humedad(completeData);
+      await nuevaLectura.save();
+      console.log(`💾 Datos registrados en MongoDB`);
+      
+      // Emitir el nuevo dato a todos los clientes conectados
+      io.emit('nueva-lectura', { ...completeData, fecha: nuevaLectura.fecha });
+    } else {
+      datosHumedad.unshift(completeData);
+      if (datosHumedad.length > 100) datosHumedad.pop();
+      console.log(`💾 Datos registrados en memoria`);
+      
+      // Guardar en archivo para persistencia
+      guardarDatosAArchivo();
+      
+      // Emitir el nuevo dato a todos los clientes conectados
+      io.emit('nueva-lectura', completeData);
+    }
+    
+    // Limpiar buffer
+    sensorDataBuffer = {};
+  }
+};
+
+// Timer para guardar datos acumulados periódicamente
+setInterval(async () => {
+  const now = Date.now();
+  if (now - lastSensorUpdate > SENSOR_TIMEOUT && Object.keys(sensorDataBuffer).length > 0) {
+    await saveAccumulatedData();
+  }
+}, 1000);
+
 try {
   port = new SerialPort({
     path: process.env.USB_PORT || 'COM10', // Puerto predeterminado para Windows
@@ -168,7 +257,6 @@ try {
     // Buscar líneas completas en el buffer
     let lines = buffer.split('\n');
     
-    
     // Si tenemos al menos una línea completa (terminada en \n)
     if (lines.length > 1) {
       // La última línea podría estar incompleta, se guarda para el próximo procesamiento
@@ -182,22 +270,18 @@ try {
         if (parsedData && Object.keys(parsedData).length > 0) {
           console.log(`📡 Datos del sensor detectados:`, parsedData);
           
-          // Guardar en MongoDB si está disponible, o en memoria si no
-          if (Humedad) {
-            const nuevaLectura = new Humedad(parsedData);
-            await nuevaLectura.save();
-            console.log(`💾 Datos registrados en MongoDB`);
-            
-            // Emitir el nuevo dato a todos los clientes conectados
-            io.emit('nueva-lectura', { ...parsedData, fecha: nuevaLectura.fecha });
-          } else {
-            const nuevoDato = { ...parsedData, fecha: new Date() };
-            datosHumedad.unshift(nuevoDato);
-            if (datosHumedad.length > 100) datosHumedad.pop(); // Mantener solo los últimos 100 registros
-            console.log(`💾 Datos registrados en memoria`);
-            
-            // Emitir el nuevo dato a todos los clientes conectados
-            io.emit('nueva-lectura', nuevoDato);
+          // Agregar los datos al buffer de sensores
+          Object.assign(sensorDataBuffer, parsedData);
+          lastSensorUpdate = Date.now();
+          
+          console.log(`📊 Buffer de sensores actualizado:`, sensorDataBuffer);
+          
+          // Verificar si tenemos todos los campos esperados en el buffer
+          const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'alerta'];
+          const bufferHasAllFields = expectedFields.every(field => sensorDataBuffer.hasOwnProperty(field));
+          
+          if (bufferHasAllFields) {
+            await saveAccumulatedData();
           }
         }
       }
@@ -242,6 +326,9 @@ app.post('/api/humedad', async (req, res) => {
       datosHumedad.unshift(nueva);
       if (datosHumedad.length > 100) datosHumedad.pop();
       
+      // Guardar en archivo para persistencia
+      guardarDatosAArchivo();
+      
       // Emitir el nuevo dato a todos los clientes conectados
       io.emit('nueva-lectura', nueva);
       
@@ -263,6 +350,21 @@ app.get('/api/humedad', async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ message: 'Error al obtener datos' });
+  }
+});
+
+// Endpoint adicional para datos de sensores (alias de /api/humedad)
+app.get('/api/datos-sensores', async (req, res) => {
+  try {
+    // Obtener de MongoDB si está disponible, o de memoria si no
+    if (Humedad) {
+      const datos = await Humedad.find().sort({ fecha: -1 }).limit(100);
+      res.json(datos);
+    } else {
+      res.json(datosHumedad);
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener datos de sensores' });
   }
 });
 
@@ -424,32 +526,75 @@ function parseSensorData(raw) {
   };
 
   const result = {};
-  const parts = raw.split('|').map(p => p.trim());
-
-  for (const part of parts) {
-    const [key, valueRaw] = part.split(':').map(s => s.trim());
-    if (!map[key]) continue;
-    let value = valueRaw;
-
-    // Limpieza y conversión de valores
-    if (key === 'HS' || key === 'HA' || key === 'Rain') {
-      value = parseFloat(value.replace('%', ''));
-    } else if (key === 'T1' || key === 'T2') {
-      value = parseFloat(value.replace('C', ''));
-    } else if (key === 'P') {
-      value = parseInt(value.replace('hPa', ''));
-    } else if (key === 'Lux') {
-      value = parseInt(value.replace('lx', ''));
-    } else if (key === 'Alert') {
-      value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES');
-    }
+  
+  // Limpiar la línea de caracteres no deseados
+  const cleanedRaw = raw.replace(/[\r\n\t]/g, '').trim();
+  
+  // Intentar parsear como línea completa con separadores |
+  if (cleanedRaw.includes('|')) {
+    const parts = cleanedRaw.split('|').map(p => p.trim());
     
-    // Validar que el valor sea un número válido (excepto para alerta)
-    if (key !== 'Alert' && (isNaN(value) || value === null || value === undefined)) {
-      continue; // Saltar valores inválidos
+    for (const part of parts) {
+      const colonIndex = part.indexOf(':');
+      if (colonIndex === -1) continue;
+      
+      const key = part.substring(0, colonIndex).trim();
+      const valueRaw = part.substring(colonIndex + 1).trim();
+      
+      if (!map[key]) continue;
+      let value = valueRaw;
+
+      // Limpieza y conversión de valores
+      if (key === 'HS' || key === 'HA' || key === 'Rain') {
+        value = parseFloat(value.replace('%', ''));
+      } else if (key === 'T1' || key === 'T2') {
+        value = parseFloat(value.replace('C', ''));
+      } else if (key === 'P') {
+        value = parseInt(value.replace('hPa', ''));
+      } else if (key === 'Lux') {
+        value = parseInt(value.replace('lx', ''));
+      } else if (key === 'Alert') {
+        value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES');
+      }
+      
+      // Validar que el valor sea un número válido (excepto para alerta)
+      if (key !== 'Alert' && (isNaN(value) || value === null || value === undefined)) {
+        continue; // Saltar valores inválidos
+      }
+      
+      result[map[key]] = value;
     }
-    
-    result[map[key]] = value;
+  } else {
+    // Intentar parsear como dato individual (formato: "KEY:VALUE")
+    const colonIndex = cleanedRaw.indexOf(':');
+    if (colonIndex !== -1) {
+      const key = cleanedRaw.substring(0, colonIndex).trim();
+      const valueRaw = cleanedRaw.substring(colonIndex + 1).trim();
+      
+      if (map[key]) {
+        let value = valueRaw;
+        
+        // Limpieza y conversión de valores
+        if (key === 'HS' || key === 'HA' || key === 'Rain') {
+          value = parseFloat(value.replace('%', ''));
+        } else if (key === 'T1' || key === 'T2') {
+          value = parseFloat(value.replace('C', ''));
+        } else if (key === 'P') {
+          value = parseInt(value.replace('hPa', ''));
+        } else if (key === 'Lux') {
+          value = parseInt(value.replace('lx', ''));
+        } else if (key === 'Alert') {
+          value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES');
+        }
+        
+        // Validar que el valor sea un número válido (excepto para alerta)
+        if (key !== 'Alert' && (isNaN(value) || value === null || value === undefined)) {
+          return null; // Valor inválido
+        }
+        
+        result[map[key]] = value;
+      }
+    }
   }
 
   // Solo retornar si tenemos al menos algunos datos válidos
@@ -457,15 +602,6 @@ function parseSensorData(raw) {
     return null;
   }
 
-  // Agregar fecha y otros campos
-  result.fecha = new Date();
-  result.__v = 0;
-
   return result;
 }
-
-// Ejemplo de uso:
-const raw = "HS:11% | T1:21.1C | T2:25.8C | P:1018hPa | HA:29.6% | Lux:810lx | Rain:0% | Alert: SI";
-const doc = parseSensorData(raw);
-// Ahora puedes guardar 'doc' en MongoDB
 
