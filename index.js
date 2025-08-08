@@ -1,31 +1,40 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const { SerialPort } = require('serialport');
+const nodemailer = require('nodemailer');
 const path = require('path');
 const fs = require('fs');
 const app = express();
 const http = require('http');
 const server = http.createServer(app);
+require('dotenv').config();
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: CLIENT_URL,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true
   }
 });
-require('dotenv').config();
 
 // Servir archivos estáticos de la carpeta 'build'
 app.use(express.static(path.join(__dirname, 'build')));
 
 // Configuración de CORS para las solicitudes HTTP
 app.use(cors({
-  origin: '*',
+  origin: CLIENT_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true
 }));
 app.use(express.json());
+app.use(cookieParser());
+app.use(passport.initialize());
 
 // Variable para almacenar datos en memoria (temporal, hasta que MongoDB esté configurado)
 const datosHumedad = [];
@@ -102,6 +111,7 @@ generarDatosIniciales();
 let mongoose;
 let Humedad;
 let Production;
+let User;
 try {
   mongoose = require('mongoose');
   
@@ -158,8 +168,23 @@ try {
       fecha_registro: { type: Date, default: Date.now }
     });
 
+    // Esquema de usuarios para autenticación
+    const userSchema = new mongoose.Schema({
+      email: { type: String, required: true, unique: true },
+      name: { type: String },
+      passwordHash: { type: String }, // solo para provider local
+      provider: { type: String, enum: ['local', 'google'], default: 'local' },
+      googleId: { type: String },
+      role: { type: String, enum: ['admin', 'user'], default: 'user' },
+      isActive: { type: Boolean, default: true },
+      passwordResetToken: { type: String },
+      passwordResetExpires: { type: Date },
+      createdAt: { type: Date, default: Date.now }
+    });
+
     Humedad = mongoose.model('Humedad', humedadSchema);
     Production = mongoose.model('Production', productionSchema);
+    User = mongoose.model('User', userSchema);
 
     // Migrar datos en memoria a MongoDB si existen
     if (datosProduccion.length > 0) {
@@ -174,6 +199,29 @@ try {
         console.error('❌ Error en migración:', err);
       });
     }
+
+    // Crear usuario admin inicial si se define por variables de entorno
+    (async () => {
+      try {
+        if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+          const existing = await User.findOne({ email: process.env.ADMIN_EMAIL });
+          if (!existing) {
+            const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
+            await User.create({
+              email: process.env.ADMIN_EMAIL,
+              name: 'Administrator',
+              passwordHash: hash,
+              provider: 'local',
+              role: 'admin',
+              isActive: true
+            });
+            console.log('👑 Usuario admin creado a partir de variables de entorno');
+          }
+        }
+      } catch (e) {
+        console.error('No se pudo crear el admin inicial:', e);
+      }
+    })();
   }).catch(err => {
     console.error('❌ Error al conectar con MongoDB:', err);
     console.log('⚠️ Funcionando en modo de almacenamiento en memoria');
@@ -182,6 +230,231 @@ try {
   console.error('❌ Error al cargar MongoDB:', error);
   console.log('⚠️ Funcionando en modo de almacenamiento en memoria');
 }
+
+// Utilidades de autenticación
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const signToken = (user) => {
+  return jwt.sign(
+    { uid: user._id.toString(), email: user.email, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+};
+
+const setAuthCookie = (res, token) => {
+  res.cookie('msa_token', token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: !!process.env.COOKIE_SECURE || false,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+};
+
+const clearAuthCookie = (res) => {
+  res.clearCookie('msa_token', { path: '/' });
+};
+
+const requireAuth = async (req, res, next) => {
+  try {
+    const token = req.cookies.msa_token || (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
+    if (!token) return res.status(401).json({ message: 'No autenticado' });
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ message: 'Token inválido' });
+  }
+};
+
+const requireAdmin = (req, res, next) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Acceso denegado' });
+  }
+  next();
+};
+
+// Configurar Passport Google OAuth si hay MongoDB (User definido)
+if (typeof GoogleStrategy === 'function') {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID || 'unset',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'unset',
+    callbackURL: (process.env.API_BASE_URL || 'http://localhost:5000') + '/auth/google/callback'
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      if (!User) return done(null, false);
+      const email = profile.emails && profile.emails[0] && profile.emails[0].value;
+      if (!email) return done(null, false);
+      // No permitir auto-registro: solo usuarios existentes pueden entrar
+      let user = await User.findOne({ email });
+      if (!user) {
+        return done(null, false, { message: 'El acceso no está permitido para este correo' });
+      }
+      if (!user.isActive) {
+        return done(null, false, { message: 'Usuario inactivo' });
+      }
+      // Actualizar googleId si no está
+      if (!user.googleId) {
+        user.googleId = profile.id;
+        user.provider = 'google';
+        await user.save();
+      }
+      return done(null, user);
+    } catch (err) {
+      return done(err);
+    }
+  }));
+}
+
+// Rutas de autenticación
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Correo y contraseña requeridos' });
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ message: 'Credenciales inválidas' });
+    if (!user.isActive) return res.status(403).json({ message: 'Usuario inactivo' });
+    if (user.provider !== 'local' || !user.passwordHash) return res.status(400).json({ message: 'Este usuario debe iniciar con Google' });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ message: 'Credenciales inválidas' });
+    const token = signToken(user);
+    setAuthCookie(res, token);
+    res.json({ message: 'Sesión iniciada', user: { email: user.email, name: user.name, role: user.role } });
+  } catch (e) {
+    res.status(500).json({ message: 'Error en login' });
+  }
+});
+
+app.post('/auth/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.json({ message: 'Sesión cerrada' });
+});
+
+app.get('/auth/me', requireAuth, async (req, res) => {
+  try {
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const user = await User.findById(req.user.uid).select('email name role isActive');
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
+    res.json({ user });
+  } catch (e) {
+    res.status(500).json({ message: 'Error obteniendo sesión' });
+  }
+});
+
+// Recuperación de contraseña
+const crypto = require('crypto');
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true',
+  auth: process.env.SMTP_USER && process.env.SMTP_PASS ? {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  } : undefined,
+});
+
+app.post('/auth/forgot', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Correo requerido' });
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const user = await User.findOne({ email });
+    if (!user || user.provider !== 'local') {
+      // Responder 200 para no filtrar correos
+      return res.json({ message: 'Si el correo existe, se enviarán instrucciones' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    user.passwordResetToken = tokenHash;
+    user.passwordResetExpires = new Date(Date.now() + 1000 * 60 * 15); // 15min
+    await user.save();
+    const resetLink = `${CLIENT_URL}/reset?token=${token}`;
+    const from = process.env.FROM_EMAIL || 'no-reply@example.com';
+    if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+      await transporter.sendMail({
+        from,
+        to: user.email,
+        subject: 'Recuperación de contraseña',
+        text: `Para restablecer tu contraseña, visita: ${resetLink}`,
+        html: `<p>Para restablecer tu contraseña, haz clic en el siguiente enlace:</p><p><a href="${resetLink}">${resetLink}</a></p>`
+      });
+    } else {
+      console.log('🔗 Enlace de restablecimiento (modo sin SMTP):', resetLink);
+    }
+    res.json({ message: 'Si el correo existe, se enviarán instrucciones' });
+  } catch (e) {
+    res.status(500).json({ message: 'Error en recuperación' });
+  }
+});
+
+app.post('/auth/reset', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ message: 'Datos incompletos' });
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      passwordResetToken: tokenHash,
+      passwordResetExpires: { $gt: new Date() },
+    });
+    if (!user) return res.status(400).json({ message: 'Token inválido o expirado' });
+    user.passwordHash = await bcrypt.hash(password, 10);
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+    res.json({ message: 'Contraseña actualizada' });
+  } catch (e) {
+    res.status(500).json({ message: 'Error restableciendo contraseña' });
+  }
+});
+
+// Google OAuth endpoints
+app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'], session: false }));
+
+app.get('/auth/google/callback', (req, res, next) => {
+  passport.authenticate('google', { session: false }, (err, user, info) => {
+    if (err || !user) {
+      const reason = (info && info.message) || 'No autorizado';
+      return res.redirect(`${CLIENT_URL}/login?error=${encodeURIComponent(reason)}`);
+    }
+    const token = signToken(user);
+    setAuthCookie(res, token);
+    return res.redirect(`${CLIENT_URL}/`);
+  })(req, res, next);
+});
+
+// Rutas de administración (solo admin)
+app.get('/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const users = await User.find().select('email name role isActive provider createdAt');
+    res.json({ users });
+  } catch (e) {
+    res.status(500).json({ message: 'Error listando usuarios' });
+  }
+});
+
+app.post('/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email, name, role = 'user', password, isActive = true, provider = 'local' } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email requerido' });
+    const emailRegex = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+    if (!emailRegex.test(email)) return res.status(400).json({ message: 'Email inválido' });
+    if (provider === 'local' && !password) return res.status(400).json({ message: 'Contraseña requerida para usuario local' });
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(409).json({ message: 'El usuario ya existe' });
+    const doc = { email, name, role, isActive, provider };
+    if (provider === 'local') {
+      doc.passwordHash = await bcrypt.hash(password, 10);
+    }
+    const created = await User.create(doc);
+    res.status(201).json({ user: { email: created.email, name: created.name, role: created.role, isActive: created.isActive, provider: created.provider } });
+  } catch (e) {
+    res.status(500).json({ message: 'Error creando usuario' });
+  }
+});
 
 // WebSocket connection
 io.on('connection', (socket) => {
@@ -194,6 +467,8 @@ io.on('connection', (socket) => {
 
 // Configuración del puerto Serial
 let port;
+let serialReconnectTimer;
+const SERIAL_RETRY_MS = Number(process.env.SERIAL_RETRY_MS || 10000);
 // Buffer para acumular datos de sensores individuales
 let sensorDataBuffer = {};
 let lastSensorUpdate = Date.now();
@@ -242,59 +517,70 @@ setInterval(async () => {
   }
 }, 1000);
 
-try {
-  port = new SerialPort({
-    path: process.env.USB_PORT || 'COM10', // Puerto predeterminado para Windows
-    baudRate: 115200,
-  });
+function scheduleSerialReconnect() {
+  if (serialReconnectTimer) return;
+  serialReconnectTimer = setTimeout(() => {
+    serialReconnectTimer = null;
+    connectSerialPort();
+  }, SERIAL_RETRY_MS);
+}
 
-  let buffer = '';
+function connectSerialPort() {
+  const desiredPath = process.env.USB_PORT || '/dev/ttyUSB0';
+  try {
+    console.log(`🔌 Intentando conectar puerto serial en ${desiredPath}...`);
+    port = new SerialPort({ path: desiredPath, baudRate: 115200 });
 
-  port.on('data', async (data) => {
-    // Añadir los datos recibidos al buffer
-    buffer += data.toString();
-    
-    // Buscar líneas completas en el buffer
-    let lines = buffer.split('\n');
-    
-    // Si tenemos al menos una línea completa (terminada en \n)
-    if (lines.length > 1) {
-      // La última línea podría estar incompleta, se guarda para el próximo procesamiento
-      buffer = lines.pop();
-      
-      for (const line of lines) {
-        // Usar la función parseSensorData para procesar la línea
-        const parsedData = parseSensorData(line);
-        
-        // Solo procesar si tenemos datos válidos
-        if (parsedData && Object.keys(parsedData).length > 0) {
-          console.log(`📡 Datos del sensor detectados:`, parsedData);
-          
-          // Agregar los datos al buffer de sensores
-          Object.assign(sensorDataBuffer, parsedData);
-          lastSensorUpdate = Date.now();
-          
-          console.log(`📊 Buffer de sensores actualizado:`, sensorDataBuffer);
-          
-          // Verificar si tenemos todos los campos esperados en el buffer
-          const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'alerta'];
-          const bufferHasAllFields = expectedFields.every(field => sensorDataBuffer.hasOwnProperty(field));
-          
-          if (bufferHasAllFields) {
-            await saveAccumulatedData();
+    let buffer = '';
+
+    port.on('open', () => {
+      console.log(`✅ Puerto serial abierto en ${desiredPath}`);
+      if (serialReconnectTimer) {
+        clearTimeout(serialReconnectTimer);
+        serialReconnectTimer = null;
+      }
+    });
+
+    port.on('data', async (data) => {
+      buffer += data.toString();
+      let lines = buffer.split('\n');
+      if (lines.length > 1) {
+        buffer = lines.pop();
+        for (const line of lines) {
+          const parsedData = parseSensorData(line);
+          if (parsedData && Object.keys(parsedData).length > 0) {
+            console.log(`📡 Datos del sensor detectados:`, parsedData);
+            Object.assign(sensorDataBuffer, parsedData);
+            lastSensorUpdate = Date.now();
+            console.log(`📊 Buffer de sensores actualizado:`, sensorDataBuffer);
+            const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'alerta'];
+            const bufferHasAllFields = expectedFields.every(field => Object.prototype.hasOwnProperty.call(sensorDataBuffer, field));
+            if (bufferHasAllFields) {
+              await saveAccumulatedData();
+            }
           }
         }
       }
-    }
-  });
+    });
 
-  port.on('error', (err) => {
-    console.error('❌ Error en el puerto serial:', err.message);
-  });
-} catch (error) {
-  console.error(`❌ Error al inicializar el puerto serial: ${error.message}`);
-  console.log('⚠️ La aplicación continuará sin lectura desde USB');
+    port.on('close', () => {
+      console.warn('⚠️ Puerto serial cerrado. Reintentando conexión...');
+      scheduleSerialReconnect();
+    });
+
+    port.on('error', (err) => {
+      console.error('❌ Error en el puerto serial:', err.message);
+      try { port.close(); } catch (_) {}
+      scheduleSerialReconnect();
+    });
+  } catch (error) {
+    console.error(`❌ Error al inicializar el puerto serial: ${error.message}`);
+    console.log('⚠️ Reintentando conectar al puerto serial...');
+    scheduleSerialReconnect();
+  }
 }
+
+connectSerialPort();
 
 // API Endpoints
 app.get('/api', (req, res) => {
