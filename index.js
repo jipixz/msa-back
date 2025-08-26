@@ -28,12 +28,18 @@ app.use(express.static(path.join(__dirname, 'build')));
 
 // Configuración de CORS para las solicitudes HTTP
 app.use(cors({
-  origin: CLIENT_URL,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
+
+// Agregar headers de codificación UTF-8
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
 app.use(passport.initialize());
 
 // Variable para almacenar datos en memoria (temporal, hasta que MongoDB esté configurado)
@@ -177,6 +183,7 @@ try {
       googleId: { type: String },
       role: { type: String, enum: ['admin', 'user'], default: 'user' },
       isActive: { type: Boolean, default: true },
+      avatarUrl: { type: String },
       passwordResetToken: { type: String },
       passwordResetExpires: { type: Date },
       createdAt: { type: Date, default: Date.now }
@@ -235,7 +242,7 @@ try {
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const signToken = (user) => {
   return jwt.sign(
-    { uid: user._id.toString(), email: user.email, role: user.role },
+    { uid: user._id.toString(), email: user.email, role: user.role, name: user.name, avatarUrl: user.avatarUrl },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -334,7 +341,7 @@ app.post('/auth/logout', (req, res) => {
 app.get('/auth/me', requireAuth, async (req, res) => {
   try {
     if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
-    const user = await User.findById(req.user.uid).select('email name role isActive');
+    const user = await User.findById(req.user.uid).select('email name role isActive avatarUrl');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
     res.json({ user });
   } catch (e) {
@@ -428,7 +435,7 @@ app.get('/auth/google/callback', (req, res, next) => {
 app.get('/admin/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
-    const users = await User.find().select('email name role isActive provider createdAt');
+    const users = await User.find().select('email name role isActive provider createdAt avatarUrl');
     res.json({ users });
   } catch (e) {
     res.status(500).json({ message: 'Error listando usuarios' });
@@ -445,14 +452,74 @@ app.post('/admin/users', requireAuth, requireAdmin, async (req, res) => {
     if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
     const exists = await User.findOne({ email });
     if (exists) return res.status(409).json({ message: 'El usuario ya existe' });
-    const doc = { email, name, role, isActive, provider };
+    const defaultAvatars = [
+      '/avatars/a1.svg','/avatars/a2.svg','/avatars/a3.svg','/avatars/a4.svg','/avatars/a5.svg',
+      '/avatars/a6.svg','/avatars/a7.svg','/avatars/a8.svg','/avatars/a9.svg','/avatars/a10.svg'
+    ];
+    const randomAvatar = defaultAvatars[Math.floor(Math.random()*defaultAvatars.length)];
+    const doc = { email, name, role, isActive, provider, avatarUrl: randomAvatar };
     if (provider === 'local') {
       doc.passwordHash = await bcrypt.hash(password, 10);
     }
     const created = await User.create(doc);
-    res.status(201).json({ user: { email: created.email, name: created.name, role: created.role, isActive: created.isActive, provider: created.provider } });
+    res.status(201).json({ user: { email: created.email, name: created.name, role: created.role, isActive: created.isActive, provider: created.provider, avatarUrl: created.avatarUrl } });
   } catch (e) {
     res.status(500).json({ message: 'Error creando usuario' });
+  }
+});
+
+app.put('/admin/users/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name, role, isActive, avatarUrl, password } = req.body;
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
+    
+    const updateData = {};
+    if (email !== undefined) {
+      const emailRegex = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+      if (!emailRegex.test(email)) return res.status(400).json({ message: 'Email inválido' });
+      updateData.email = email;
+    }
+    if (name !== undefined) updateData.name = name;
+    if (role !== undefined) updateData.role = role;
+    if (isActive !== undefined) updateData.isActive = isActive;
+    if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl;
+    if (password !== undefined && password.trim()) {
+      updateData.passwordHash = await bcrypt.hash(password, 10);
+    }
+    
+    const updated = await User.findByIdAndUpdate(id, updateData, { new: true });
+    res.json({ user: { email: updated.email, name: updated.name, role: updated.role, isActive: updated.isActive, provider: updated.provider, avatarUrl: updated.avatarUrl } });
+  } catch (e) {
+    res.status(500).json({ message: 'Error actualizando usuario' });
+  }
+});
+
+// Endpoint para subir avatares personalizados
+const multer = require('multer');
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'public/uploads/')
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+    cb(null, 'avatar-' + uniqueSuffix + '.' + file.originalname.split('.').pop())
+  }
+});
+const upload = multer({ storage: storage });
+
+app.post('/admin/upload-avatar', requireAuth, requireAdmin, upload.single('avatar'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No se subió ningún archivo' });
+    }
+    const avatarUrl = `/uploads/${req.file.filename}`;
+    res.json({ avatarUrl });
+  } catch (e) {
+    res.status(500).json({ message: 'Error subiendo avatar' });
   }
 });
 
@@ -467,12 +534,15 @@ io.on('connection', (socket) => {
 
 // Configuración del puerto Serial
 let port;
-let serialReconnectTimer;
-const SERIAL_RETRY_MS = Number(process.env.SERIAL_RETRY_MS || 10000);
+const SERIAL_RETRY_MS = Number(process.env.SERIAL_RETRY_MS || 30000); // 30 segundos por defecto
 // Buffer para acumular datos de sensores individuales
 let sensorDataBuffer = {};
 let lastSensorUpdate = Date.now();
-const SENSOR_TIMEOUT = 5000; // 5 segundos para completar todos los sensores
+const SENSOR_TIMEOUT = 5000;
+let serialReconnectTimer = null;
+let isReconnecting = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10; // Máximo 10 intentos antes de pausar
 
 // Función para guardar datos acumulados
 const saveAccumulatedData = async () => {
@@ -517,24 +587,86 @@ setInterval(async () => {
   }
 }, 1000);
 
+async function listAvailablePorts() {
+  try {
+    const ports = await SerialPort.list();
+    if (ports.length === 0) {
+      console.log('📋 No se encontraron puertos seriales disponibles');
+    } else {
+      console.log('📋 Puertos seriales disponibles:');
+      ports.forEach(port => {
+        console.log(`   - ${port.path} (${port.manufacturer || 'Sin fabricante'})`);
+      });
+    }
+    return ports;
+  } catch (error) {
+    console.error('❌ Error al listar puertos:', error.message);
+    return [];
+  }
+}
+
 function scheduleSerialReconnect() {
-  if (serialReconnectTimer) return;
+  if (serialReconnectTimer || isReconnecting) {
+    return; // Silenciosamente ignorar si ya hay una reconexión programada
+  }
+  
+  reconnectAttempts++;
+  
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    console.log(`⏸️ Demasiados intentos de reconexión (${reconnectAttempts}). Pausando por 5 minutos...`);
+    serialReconnectTimer = setTimeout(() => {
+      reconnectAttempts = 0;
+      serialReconnectTimer = null;
+      scheduleSerialReconnect();
+    }, 5 * 60 * 1000); // 5 minutos
+    return;
+  }
+  
+  console.log(`⏰ Intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}: Reconectando en ${SERIAL_RETRY_MS/1000} segundos...`);
   serialReconnectTimer = setTimeout(() => {
     serialReconnectTimer = null;
+    isReconnecting = true;
     connectSerialPort();
   }, SERIAL_RETRY_MS);
 }
 
 function connectSerialPort() {
   const desiredPath = process.env.USB_PORT || '/dev/ttyUSB0';
+  
+  // Verificar si el archivo del puerto existe
+  if (!fs.existsSync(desiredPath)) {
+    console.log(`⚠️ Puerto ${desiredPath} no encontrado.`);
+    if (reconnectAttempts === 1) {
+      // Solo listar puertos en el primer intento
+      listAvailablePorts();
+    }
+    scheduleSerialReconnect();
+    return;
+  }
+  
+  // Limpiar conexión anterior si existe
+  if (port) {
+    try {
+      port.removeAllListeners();
+      if (port.isOpen) {
+        port.close();
+      }
+    } catch (error) {
+      // Ignorar errores al cerrar
+    }
+    port = null;
+  }
+  
   try {
-    console.log(`🔌 Intentando conectar puerto serial en ${desiredPath}...`);
+    console.log(`🔌 Conectando a ${desiredPath}...`);
     port = new SerialPort({ path: desiredPath, baudRate: 115200 });
 
     let buffer = '';
 
     port.on('open', () => {
-      console.log(`✅ Puerto serial abierto en ${desiredPath}`);
+      console.log(`✅ Puerto serial conectado exitosamente`);
+      isReconnecting = false;
+      reconnectAttempts = 0; // Resetear contador de intentos
       if (serialReconnectTimer) {
         clearTimeout(serialReconnectTimer);
         serialReconnectTimer = null;
@@ -549,10 +681,12 @@ function connectSerialPort() {
         for (const line of lines) {
           const parsedData = parseSensorData(line);
           if (parsedData && Object.keys(parsedData).length > 0) {
-            console.log(`📡 Datos del sensor detectados:`, parsedData);
+            // Solo loggear datos importantes, no todos los datos
+            if (parsedData.alerta) {
+              console.log(`🚨 ALERTA detectada:`, parsedData);
+            }
             Object.assign(sensorDataBuffer, parsedData);
             lastSensorUpdate = Date.now();
-            console.log(`📊 Buffer de sensores actualizado:`, sensorDataBuffer);
             const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'alerta'];
             const bufferHasAllFields = expectedFields.every(field => Object.prototype.hasOwnProperty.call(sensorDataBuffer, field));
             if (bufferHasAllFields) {
@@ -564,18 +698,32 @@ function connectSerialPort() {
     });
 
     port.on('close', () => {
-      console.warn('⚠️ Puerto serial cerrado. Reintentando conexión...');
+      console.log('⚠️ Puerto serial desconectado');
+      isReconnecting = false;
       scheduleSerialReconnect();
     });
 
     port.on('error', (err) => {
-      console.error('❌ Error en el puerto serial:', err.message);
-      try { port.close(); } catch (_) {}
+      console.error('❌ Error en puerto serial:', err.message);
+      isReconnecting = false;
+      try { 
+        if (port) {
+          port.removeAllListeners();
+          // Solo cerrar si está abierto
+          if (port.isOpen) {
+            port.close(); 
+          }
+        }
+      } catch (closeError) {
+        // Ignorar errores al cerrar
+      }
+      port = null;
       scheduleSerialReconnect();
     });
   } catch (error) {
-    console.error(`❌ Error al inicializar el puerto serial: ${error.message}`);
-    console.log('⚠️ Reintentando conectar al puerto serial...');
+    console.error(`❌ Error al inicializar puerto serial: ${error.message}`);
+    isReconnecting = false;
+    port = null;
     scheduleSerialReconnect();
   }
 }
@@ -786,6 +934,25 @@ app.get('/api/production/stats', async (req, res) => {
   } catch (error) {
     console.error('Error al obtener estadísticas:', error);
     res.status(500).json({ message: 'Error al obtener estadísticas' });
+  }
+});
+
+app.get('/api/serial-status', async (req, res) => {
+  try {
+    const ports = await listAvailablePorts();
+    const desiredPath = process.env.USB_PORT || '/dev/ttyUSB0';
+    const portExists = fs.existsSync(desiredPath);
+    
+    res.json({
+      connected: port && port.isOpen,
+      desiredPort: desiredPath,
+      portExists: portExists,
+      availablePorts: ports,
+      reconnectAttempts: reconnectAttempts,
+      isReconnecting: isReconnecting
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
