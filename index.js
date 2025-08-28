@@ -78,10 +78,12 @@ const guardarDatosAArchivo = () => {
   }
 };
 
-// Función para generar datos iniciales de sensores si no existen
+// Función para generar datos iniciales de sensores SOLO para visualización
 const generarDatosIniciales = () => {
   if (datosHumedad.length === 0) {
-    console.log('📊 Generando datos iniciales de sensores...');
+    console.log('📊 Generando datos iniciales de sensores SOLO para visualización...');
+    console.log('⚠️ Estos datos NO se guardarán en MongoDB ni afectarán las predicciones');
+    
     const ahora = new Date();
     
     // Generar 20 registros de las últimas 10 horas (cada 30 minutos)
@@ -98,13 +100,17 @@ const generarDatosIniciales = () => {
         lluvia: Math.random() > 0.8 ? Math.round(Math.random() * 5 * 10) / 10 : 0, // 20% probabilidad de lluvia
         alerta: Math.random() > 0.9, // 10% probabilidad de alerta
         fecha: fecha,
-        __v: 0
+        __v: 0,
+        isDummy: true, // Marcar como datos ficticios
+        source: 'demo', // Indicar que es para demostración
+        generated: true // Indicar que fue generado automáticamente
       };
       
       datosHumedad.push(registro);
     }
     
-    console.log(`✅ Generados ${datosHumedad.length} registros iniciales de sensores`);
+    console.log(`✅ Generados ${datosHumedad.length} registros de DEMOSTRACIÓN`);
+    console.log(`📊 Estos datos solo se usan para visualización inicial`);
     guardarDatosAArchivo(); // Guardar los datos generados
   }
 };
@@ -544,28 +550,61 @@ let isReconnecting = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10; // Máximo 10 intentos antes de pausar
 
+// Función para detectar si los datos son reales o ficticios
+const isRealSensorData = (data) => {
+  // Verificar si los datos provienen de sensores reales
+  // Los datos ficticios tienen patrones aleatorios específicos
+  const hasAllRequiredFields = data.humedadSuelo !== undefined && 
+                              data.temperaturaBME !== undefined && 
+                              data.humedadAire !== undefined &&
+                              data.fecha !== undefined;
+  
+  // Verificar que no sean datos generados por generarDatosIniciales
+  const isNotDummy = !data.isDummy && !data.source && !data.generated;
+  
+  // Verificar que los valores estén en rangos realistas
+  const realisticRanges = data.humedadSuelo >= 0 && data.humedadSuelo <= 100 &&
+                         data.temperaturaBME >= -10 && data.temperaturaBME <= 50 &&
+                         data.humedadAire >= 0 && data.humedadAire <= 100;
+  
+  return hasAllRequiredFields && isNotDummy && realisticRanges;
+};
+
 // Función para guardar datos acumulados
 const saveAccumulatedData = async () => {
   if (Object.keys(sensorDataBuffer).length > 0) {
     const completeData = {
       ...sensorDataBuffer,
-      fecha: new Date()
+      fecha: new Date(),
+      source: 'real_sensor', // Marcar como datos reales
+      timestamp: Date.now()
     };
     
     console.log(`📡 Guardando datos acumulados:`, completeData);
     
-    // Guardar en MongoDB si está disponible, o en memoria si no
-    if (Humedad) {
+    // SOLO guardar en MongoDB si los datos son reales
+    if (Humedad && isRealSensorData(completeData)) {
       const nuevaLectura = new Humedad(completeData);
       await nuevaLectura.save();
-      console.log(`💾 Datos registrados en MongoDB`);
+      console.log(`💾 Datos REALES registrados en MongoDB`);
       
       // Emitir el nuevo dato a todos los clientes conectados
       io.emit('nueva-lectura', { ...completeData, fecha: nuevaLectura.fecha });
+    } else if (Humedad) {
+      console.log(`⚠️ Datos ficticios detectados - NO guardados en MongoDB`);
+      console.log(`📊 Datos solo para visualización en tiempo real`);
+      
+      // Emitir datos para visualización pero no guardar en BD
+      io.emit('nueva-lectura', { ...completeData, isDummy: true });
     } else {
-      datosHumedad.unshift(completeData);
-      if (datosHumedad.length > 100) datosHumedad.pop();
-      console.log(`💾 Datos registrados en memoria`);
+      // Si no hay MongoDB, guardar en memoria solo datos reales
+      if (isRealSensorData(completeData)) {
+        datosHumedad.unshift(completeData);
+        if (datosHumedad.length > 100) datosHumedad.pop();
+        console.log(`💾 Datos REALES registrados en memoria`);
+      } else {
+        console.log(`⚠️ Datos ficticios - solo para visualización`);
+      }
       
       // Guardar en archivo para persistencia
       guardarDatosAArchivo();
