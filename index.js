@@ -560,13 +560,11 @@ const isRealSensorData = (data) => {
                               data.fecha !== undefined;
   
   // Verificar que no sean datos generados por generarDatosIniciales
-  const isNotDummy = !data.isDummy && !data.source && !data.generated;
-  
+  const isNotDummy = !data.isDummy && data.source === "real_sensor" && !data.generated;
   // Verificar que los valores estén en rangos realistas
   const realisticRanges = data.humedadSuelo >= 0 && data.humedadSuelo <= 100 &&
                          data.temperaturaBME >= -10 && data.temperaturaBME <= 50 &&
                          data.humedadAire >= 0 && data.humedadAire <= 100;
-  
   return hasAllRequiredFields && isNotDummy && realisticRanges;
 };
 
