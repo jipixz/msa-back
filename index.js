@@ -144,7 +144,9 @@ try {
       luminosidad: Number,
       lluvia: Number,
       alerta: Boolean,
-      fecha: { type: Date, default: Date.now }
+      fecha: { type: Date, default: Date.now },
+      source: { type: String, default: 'real_sensor' },
+      timestamp: { type: Number }
     });
 
     // Esquema para producción de cacao
