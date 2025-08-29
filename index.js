@@ -98,7 +98,8 @@ const generarDatosIniciales = () => {
         humedadAire: Math.round((Math.random() * 30 + 50) * 10) / 10, // 50-80%
         luminosidad: Math.round(Math.random() * 800 + 200), // 200-1000 lx
         lluvia: Math.random() > 0.8 ? Math.round(Math.random() * 5 * 10) / 10 : 0, // 20% probabilidad de lluvia
-        alerta: Math.random() > 0.9, // 10% probabilidad de alerta
+        rainDigital: Math.random() > 0.8, // 20% probabilidad de lluvia digital
+        nodo: Math.floor(Math.random() * 4), // Nodo aleatorio 0-3
         fecha: fecha,
         __v: 0,
         isDummy: true, // Marcar como datos ficticios
@@ -143,7 +144,8 @@ try {
       humedadAire: Number,
       luminosidad: Number,
       lluvia: Number,
-      alerta: Boolean,
+      rainDigital: Boolean, // Cambio de 'alerta' a 'rainDigital' (booleano)
+      nodo: { type: Number, min: 0, max: 3, required: true }, // Nuevo campo para identificar el nodo
       fecha: { type: Date, default: Date.now },
       source: { type: String, default: 'real_sensor' },
       timestamp: { type: Number }
@@ -721,12 +723,12 @@ function connectSerialPort() {
           const parsedData = parseSensorData(line);
           if (parsedData && Object.keys(parsedData).length > 0) {
             // Solo loggear datos importantes, no todos los datos
-            if (parsedData.alerta) {
-              console.log(`🚨 ALERTA detectada:`, parsedData);
+            if (parsedData.rainDigital) {
+              console.log(`🌧️ LLUVIA detectada en nodo ${parsedData.nodo}:`, parsedData);
             }
             Object.assign(sensorDataBuffer, parsedData);
             lastSensorUpdate = Date.now();
-            const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'alerta'];
+            const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'rainDigital', 'nodo'];
             const bufferHasAllFields = expectedFields.every(field => Object.prototype.hasOwnProperty.call(sensorDataBuffer, field));
             if (bufferHasAllFields) {
               await saveAccumulatedData();
@@ -1014,7 +1016,8 @@ function parseSensorData(raw) {
     HA: 'humedadAire',
     Lux: 'luminosidad',
     Rain: 'lluvia',
-    Alert: 'alerta'
+    RainD: 'rainDigital', // Nuevo campo para lluvia digital
+    Nodo: 'nodo' // Nuevo campo para identificar el nodo
   };
 
   const result = {};
@@ -1045,12 +1048,14 @@ function parseSensorData(raw) {
         value = parseInt(value.replace('hPa', ''));
       } else if (key === 'Lux') {
         value = parseInt(value.replace('lx', ''));
-      } else if (key === 'Alert') {
-        value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES');
+      } else if (key === 'RainD') {
+        value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES') || value === '1' || value === 'true';
+      } else if (key === 'Nodo') {
+        value = parseInt(value);
       }
       
-      // Validar que el valor sea un número válido (excepto para alerta)
-      if (key !== 'Alert' && (isNaN(value) || value === null || value === undefined)) {
+      // Validar que el valor sea un número válido (excepto para rainDigital)
+      if (key !== 'RainD' && (isNaN(value) || value === null || value === undefined)) {
         continue; // Saltar valores inválidos
       }
       
@@ -1075,12 +1080,14 @@ function parseSensorData(raw) {
           value = parseInt(value.replace('hPa', ''));
         } else if (key === 'Lux') {
           value = parseInt(value.replace('lx', ''));
-        } else if (key === 'Alert') {
-          value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES');
+        } else if (key === 'RainD') {
+          value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES') || value === '1' || value === 'true';
+        } else if (key === 'Nodo') {
+          value = parseInt(value);
         }
         
-        // Validar que el valor sea un número válido (excepto para alerta)
-        if (key !== 'Alert' && (isNaN(value) || value === null || value === undefined)) {
+        // Validar que el valor sea un número válido (excepto para rainDigital)
+        if (key !== 'RainD' && (isNaN(value) || value === null || value === undefined)) {
           return null; // Valor inválido
         }
         
