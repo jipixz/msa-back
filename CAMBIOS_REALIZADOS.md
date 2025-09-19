@@ -141,3 +141,5 @@ HS:45.2|T1:25.3|T2:26.1|P:1013|HA:65.8|Lux:450|Rain:0.0|RainD:SI|Nodo:2
 2. **Análisis de diferencias**: Estudiar variaciones entre nodos de diferentes alturas
 3. **Optimización de predicciones**: Evaluar si las predicciones por nodo son más precisas
 4. **Alertas por nodo**: Implementar sistema de alertas específicas por ubicación
+
+

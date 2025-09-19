@@ -167,7 +167,7 @@ try {
       cantidad_kg: { type: Number, required: true },
       calidad: { 
         type: String, 
-        enum: ['Premium', 'Estándar', 'Baja'], 
+        enum: ['Premium', 'Estándar', 'Baja', 'Orgánico'], 
         default: 'Estándar' 
       },
       humedad_porcentaje: { type: Number, required: true },
@@ -181,7 +181,8 @@ try {
       temperatura_secado: { type: Number },
       humedad_final: { type: Number },
       observaciones: { type: String },
-      fecha_registro: { type: Date, default: Date.now }
+      fecha_registro: { type: Date, default: Date.now },
+      imagenes: { type: [Array] }
     });
 
     // Esquema de usuarios para autenticación
@@ -858,8 +859,10 @@ app.post('/api/production', async (req, res) => {
       tiempo_secado_horas,
       temperatura_secado,
       humedad_final,
-      observaciones
+      observaciones,
+      imagenes
     } = req.body;
+    console.log(req.body);
 
     // Guardar en MongoDB si está disponible, o en memoria si no
     if (Production) {
@@ -875,7 +878,8 @@ app.post('/api/production', async (req, res) => {
         tiempo_secado_horas: tiempo_secado_horas ? parseFloat(tiempo_secado_horas) : undefined,
         temperatura_secado: temperatura_secado ? parseFloat(temperatura_secado) : undefined,
         humedad_final: humedad_final ? parseFloat(humedad_final) : undefined,
-        observaciones
+        observaciones,
+        imagenes: imagenes || []
       });
 
       await nuevaProduccion.save();
@@ -895,6 +899,7 @@ app.post('/api/production', async (req, res) => {
         temperatura_secado: temperatura_secado ? parseFloat(temperatura_secado) : undefined,
         humedad_final: humedad_final ? parseFloat(humedad_final) : undefined,
         observaciones,
+        imagenes: imagenes || [],
         fecha_registro: new Date()
       };
 
