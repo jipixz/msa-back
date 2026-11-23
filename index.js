@@ -13,12 +13,31 @@ const app = express();
 const http = require('http');
 const server = http.createServer(app);
 require('dotenv').config();
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+
+// Log de variables de entorno al arranque (sin mostrar contraseñas)
+(function logEnv() {
+  const envVars = {
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT,
+    MONGODB_URI: process.env.MONGODB_URI ? '[SET]' : '[NOT SET]',
+    CLIENT_URL: process.env.CLIENT_URL || '(fallback: http://localhost:5173)',
+    API_BASE_URL: process.env.API_BASE_URL || '(fallback: http://localhost:5000)',
+    JWT_SECRET: process.env.JWT_SECRET ? '[SET]' : '[NOT SET]',
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL ? '[SET]' : '[NOT SET]',
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? '[SET]' : '[NOT SET]',
+    COOKIE_SECURE: process.env.COOKIE_SECURE
+  };
+  console.log('🔧 ENV al arranque:', JSON.stringify(envVars, null, 2));
+})();
+
+// Origen permitido para CORS (sin barra final para coincidir con el header Origin del navegador)
+const CLIENT_URL = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/$/, '');
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: [CLIENT_URL, CLIENT_URL + '/'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   }
 });
@@ -28,7 +47,9 @@ app.use(express.static(path.join(__dirname, 'build')));
 
 // Configuración de CORS para las solicitudes HTTP
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: [CLIENT_URL, CLIENT_URL + '/'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
