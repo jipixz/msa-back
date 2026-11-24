@@ -1046,7 +1046,7 @@ function parseSensorData(raw) {
     HA: 'humedadAire',
     Lux: 'luminosidad',
     Rain: 'lluvia',
-    RainD: 'rainDigital', // Nuevo campo para lluvia digital
+    RainBool: 'rainDigital', // Lluvia digital (sí/no); el nodo la manda como RainBool
     Nodo: 'nodo' // Nuevo campo para identificar el nodo
   };
 
@@ -1078,14 +1078,14 @@ function parseSensorData(raw) {
         value = parseInt(value.replace('hPa', ''));
       } else if (key === 'Lux') {
         value = parseInt(value.replace('lx', ''));
-      } else if (key === 'RainD') {
+      } else if (key === 'RainBool') {
         value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES') || value === '1' || value === 'true';
       } else if (key === 'Nodo') {
         value = parseInt(value);
       }
       
       // Validar que el valor sea un número válido (excepto para rainDigital)
-      if (key !== 'RainD' && (isNaN(value) || value === null || value === undefined)) {
+      if (key !== 'RainBool' && (isNaN(value) || value === null || value === undefined)) {
         continue; // Saltar valores inválidos
       }
       
@@ -1110,14 +1110,14 @@ function parseSensorData(raw) {
           value = parseInt(value.replace('hPa', ''));
         } else if (key === 'Lux') {
           value = parseInt(value.replace('lx', ''));
-        } else if (key === 'RainD') {
+        } else if (key === 'RainBool') {
           value = value.toUpperCase().includes('SI') || value.toUpperCase().includes('YES') || value === '1' || value === 'true';
         } else if (key === 'Nodo') {
           value = parseInt(value);
         }
         
         // Validar que el valor sea un número válido (excepto para rainDigital)
-        if (key !== 'RainD' && (isNaN(value) || value === null || value === undefined)) {
+        if (key !== 'RainBool' && (isNaN(value) || value === null || value === undefined)) {
           return null; // Valor inválido
         }
         
