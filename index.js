@@ -13,6 +13,7 @@ const app = express();
 const http = require('http');
 const server = http.createServer(app);
 require('dotenv').config();
+const notifier = require('./notifier');
 
 // Log de variables de entorno al arranque (sin mostrar contraseñas)
 (function logEnv() {
@@ -223,6 +224,9 @@ try {
     Production = mongoose.model('Production', productionSchema);
     User = mongoose.model('User', userSchema);
 
+    // Inicializar sistema de notificaciones (reglas + canales)
+    notifier.init({ mongoose, io }).catch((e) => console.error('❌ Error inicializando notifier:', e));
+
     // Migrar datos en memoria a MongoDB si existen
     if (datosProduccion.length > 0) {
       console.log(`🔄 Migrando ${datosProduccion.length} registros de producción a MongoDB...`);
@@ -316,6 +320,9 @@ const requireAdmin = (req, res, next) => {
   }
   next();
 };
+
+// Rutas de gestión del notificador (requieren admin)
+notifier.registerRoutes(app, requireAuth, requireAdmin);
 
 // Configurar Passport Google OAuth si hay MongoDB (User definido)
 if (typeof GoogleStrategy === 'function') {
@@ -615,7 +622,10 @@ const saveAccumulatedData = async () => {
       const nuevaLectura = new Humedad(completeData);
       await nuevaLectura.save();
       console.log(`💾 Datos REALES registrados en MongoDB`);
-      
+
+      // Evaluar reglas de notificación con la lectura real
+      notifier.evaluate({ ...completeData, fecha: nuevaLectura.fecha });
+
       // Emitir el nuevo dato a todos los clientes conectados
       io.emit('nueva-lectura', { ...completeData, fecha: nuevaLectura.fecha });
     } else if (Humedad) {
