@@ -1,0 +1,13 @@
+# Líneas reales que llegan por /dev/ttyUSB0 (una por línea). Fuente de verdad del contrato
+# firmware ↔ backend. Si cambia el formato del firmware (msa-LoRa-esp32-heltec), actualiza
+# este archivo y las pruebas de test/contrato-firmware.test.js.
+#
+# [receptor fase 1] paquete completo en una línea (Nodo dentro de la misma línea)
+HS:41% | T1:26.8C | T2:29.1C | P:1009hPa | HA:81.0% | Lux:18400lx | Rain:0% | RainBool:NO | Nodo:3
+# [receptor fase 1] línea de métricas de radio (el backend la ignora)
+RSSI:-97.00,SNR:6.50
+# [emisor fase 1] sensores fallidos: valores "nan" y campo Err (el backend ignora Err)
+HS:100% | T1:nanC | T2:nanC | P:nanhPa | HA:nan% | Lux:nanlx | Rain:99% | RainBool:SI | Nodo:0 | Err:DS18B20,BME280,BH1750
+# [firmware anterior] el Nodo llegaba en una segunda línea
+HS:44% | T1:26.6C | T2:23.5C | P:1009hPa | HA:80.2% | Lux:1234lx | Rain:3% | RainBool: NO
+Nodo: 0
