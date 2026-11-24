@@ -807,6 +807,21 @@ function connectSerialPort() {
 
 connectSerialPort();
 
+// Cloudflare Access: cuando la cookie de este host expira, el front no puede renovarla con
+// fetch (CORS bloquea el redirect al login). Entonces navega la pestaña a /access/return;
+// Access renueva la cookie (o pide login) y aquí regresamos al front.
+// Solo se redirige al front (CLIENT_URL) para no ser un open redirect.
+app.get('/access/ping', (req, res) => res.json({ ok: true }));
+app.get('/access/return', (req, res) => {
+  try {
+    const destino = new URL(String(req.query.to || ''));
+    if (destino.origin === CLIENT_URL) return res.redirect(302, destino.href);
+  } catch (_) {
+    // "to" vacío o inválido: se va a la portada del front
+  }
+  res.redirect(302, CLIENT_URL);
+});
+
 // API Endpoints
 app.get('/api', (req, res) => {
   res.json({ 
