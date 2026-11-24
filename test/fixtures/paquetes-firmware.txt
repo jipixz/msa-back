@@ -14,3 +14,5 @@ Nodo: 0
 # [emisor fases 2–4] paquete compacto: sin unidades ni espacios, RainBool 1/0 y Seq (contador de ciclos)
 HS:45|T1:25.3|T2:26.1|P:1008|HA:80.2|Lux:18400|Rain:0|RainBool:1|Nodo:3|Seq:152
 HS:100|T1:nan|T2:nan|P:nan|HA:nan|Lux:nan|Rain:99|RainBool:0|Nodo:0|Seq:7|Err:DS18B20,BME280,BH1750
+# [emisor cableado 2] con voltaje de batería
+HS:45|T1:25.3|T2:26.1|P:1008|HA:80.2|Lux:18400|Rain:0|RainBool:0|Nodo:3|Seq:153|Bat:3.91

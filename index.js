@@ -16,6 +16,7 @@ require('dotenv').config();
 const notifier = require('./notifier');
 const { parseSensorData } = require('./lib/parse-sensor-data');
 const { safeReturnUrl } = require('./lib/access');
+const { validarPreferencias } = require('./lib/preferencias');
 
 // Log de variables de entorno al arranque (sin mostrar contraseñas)
 (function logEnv() {
@@ -167,6 +168,7 @@ try {
       luminosidad: Number,
       lluvia: Number,
       rainDigital: Boolean, // Cambio de 'alerta' a 'rainDigital' (booleano)
+      bateria: Number, // Voltaje de la batería del nodo (V), si el firmware lo manda
       nodo: { type: Number, min: 0, max: 255, required: true }, // ID del nodo (0–255; antes 0–3 rechazaba el nodo 4 en adelante)
       fecha: { type: Date, default: Date.now },
       source: { type: String, default: 'real_sensor' },
@@ -223,6 +225,8 @@ try {
       avatarUrl: { type: String },
       passwordResetToken: { type: String },
       passwordResetExpires: { type: Date },
+      // Preferencias de interfaz (estilo, modo, personalización); ver lib/preferencias.js
+      preferencias: { type: mongoose.Schema.Types.Mixed },
       createdAt: { type: Date, default: Date.now }
     });
 
@@ -390,11 +394,24 @@ app.post('/auth/logout', (req, res) => {
 app.get('/auth/me', requireAuth, async (req, res) => {
   try {
     if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
-    const user = await User.findById(req.user.uid).select('email name role isActive avatarUrl');
+    const user = await User.findById(req.user.uid).select('email name role isActive avatarUrl preferencias');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
     res.json({ user });
   } catch (e) {
     res.status(500).json({ message: 'Error obteniendo sesión' });
+  }
+});
+
+// Guarda las preferencias de interfaz del usuario (estilo, modo, personalización)
+app.put('/auth/me/preferencias', requireAuth, async (req, res) => {
+  try {
+    if (!User) return res.status(500).json({ message: 'Base de datos no disponible' });
+    const preferencias = validarPreferencias(req.body);
+    if (!preferencias) return res.status(400).json({ message: 'Preferencias inválidas' });
+    await User.updateOne({ _id: req.user.uid }, { $set: { preferencias } });
+    res.json({ preferencias });
+  } catch (e) {
+    res.status(500).json({ message: 'Error guardando preferencias' });
   }
 });
 

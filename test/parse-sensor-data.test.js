@@ -68,3 +68,8 @@ test('formato compacto del firmware (fases 2–4): sin unidades, RainBool 1/0, S
   });
   assert.equal(parseSensorData('HS:45|RainBool:0|Nodo:3').rainDigital, false);
 });
+
+test('batería (cableado 2 del firmware): Bat en volts, fuera de 2.5–4.5 V se descarta', () => {
+  assert.equal(parseSensorData('HS:45|Nodo:3|Bat:3.91').bateria, 3.91);
+  assert.equal('bateria' in parseSensorData('HS:45|Nodo:3|Bat:0.12'), false);
+});
