@@ -42,8 +42,6 @@ const io = new Server(server, {
   }
 });
 
-// Servir archivos estáticos de la carpeta 'build'
-app.use(express.static(path.join(__dirname, 'build')));
 
 // Configuración de CORS para las solicitudes HTTP
 app.use(cors({
@@ -1029,9 +1027,9 @@ app.get('/api/serial-status', async (req, res) => {
   }
 });
 
-// Manejar cualquier otra ruta y devolver el index.html
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+// Este servidor solo es API (el frontend lo sirve pm2 con `serve`): cualquier otra ruta es 404.
+app.use((req, res) => {
+  res.status(404).json({ message: 'Ruta no encontrada' });
 });
 
 const PORT = process.env.PORT || 5000;
