@@ -271,6 +271,12 @@ try {
 }
 
 // Utilidades de autenticación
+// En producción el secreto es obligatorio: un valor por defecto escrito en el código
+// es público (el repo lo es) y permitiría a cualquiera firmar tokens válidos.
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
+  console.error('❌ JWT_SECRET falta o es muy corto (mínimo 32 caracteres). Genera uno con: openssl rand -hex 32');
+  process.exit(1);
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const signToken = (user) => {
   return jwt.sign(
