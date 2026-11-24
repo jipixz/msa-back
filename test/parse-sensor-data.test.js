@@ -60,3 +60,11 @@ test('límites incluidos: 0 % y 100 % son válidos', () => {
   assert.equal(parseSensorData('HS:0%').humedadSuelo, 0);
   assert.equal(parseSensorData('HS:100%').humedadSuelo, 100);
 });
+
+test('formato compacto del firmware (fases 2–4): sin unidades, RainBool 1/0, Seq ignorado', () => {
+  assert.deepEqual(parseSensorData('HS:45|T1:25.3|T2:26.1|P:1008|HA:80.2|Lux:18400|Rain:0|RainBool:1|Nodo:3|Seq:152'), {
+    humedadSuelo: 45, temperaturaDS: 25.3, temperaturaBME: 26.1, presion: 1008,
+    humedadAire: 80.2, luminosidad: 18400, lluvia: 0, rainDigital: true, nodo: 3
+  });
+  assert.equal(parseSensorData('HS:45|RainBool:0|Nodo:3').rainDigital, false);
+});

@@ -11,3 +11,6 @@ HS:100% | T1:nanC | T2:nanC | P:nanhPa | HA:nan% | Lux:nanlx | Rain:99% | RainBo
 # [firmware anterior] el Nodo llegaba en una segunda línea
 HS:44% | T1:26.6C | T2:23.5C | P:1009hPa | HA:80.2% | Lux:1234lx | Rain:3% | RainBool: NO
 Nodo: 0
+# [emisor fases 2–4] paquete compacto: sin unidades ni espacios, RainBool 1/0 y Seq (contador de ciclos)
+HS:45|T1:25.3|T2:26.1|P:1008|HA:80.2|Lux:18400|Rain:0|RainBool:1|Nodo:3|Seq:152
+HS:100|T1:nan|T2:nan|P:nan|HA:nan|Lux:nan|Rain:99|RainBool:0|Nodo:0|Seq:7|Err:DS18B20,BME280,BH1750
