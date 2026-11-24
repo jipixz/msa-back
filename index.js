@@ -167,11 +167,15 @@ try {
       luminosidad: Number,
       lluvia: Number,
       rainDigital: Boolean, // Cambio de 'alerta' a 'rainDigital' (booleano)
-      nodo: { type: Number, min: 0, max: 3, required: true }, // Nuevo campo para identificar el nodo
+      nodo: { type: Number, min: 0, max: 255, required: true }, // ID del nodo (0–255; antes 0–3 rechazaba el nodo 4 en adelante)
       fecha: { type: Date, default: Date.now },
       source: { type: String, default: 'real_sensor' },
       timestamp: { type: Number }
     });
+
+    // Índices para "las lecturas más recientes" (antes recorría los ~414k documentos: ~1 s → ~60 ms)
+    humedadSchema.index({ fecha: -1 }, { name: 'fecha_desc' });
+    humedadSchema.index({ nodo: 1, fecha: -1 }, { name: 'nodo_fecha_desc' });
 
     // Esquema para producción de cacao
     const productionSchema = new mongoose.Schema({

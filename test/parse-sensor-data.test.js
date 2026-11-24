@@ -42,9 +42,21 @@ test('líneas vacías, basura y retornos de carro no rompen el parser', () => {
   assert.equal(parseSensorData('HS:40%\r').humedadSuelo, 40);
 });
 
-// Decisión pendiente: hoy el backend acepta cualquier número (la auditoría encontró 700 %
-// guardado en Mongo por un ADC al aire). Cuando se agregue validación de rango, quita el todo.
-test('humedad fuera de 0–100 % debería rechazarse', { todo: 'validar rangos en el backend' }, () => {
-  const r = parseSensorData('HS:700%');
-  assert.equal(r, null);
+// Decisión: valores fuera del rango físico se descartan (la auditoría encontró 700 % guardado
+// en Mongo por un ADC al aire). El resto del paquete se conserva.
+test('humedad fuera de 0–100 % se descarta (dato imposible)', () => {
+  assert.equal(parseSensorData('HS:700%'), null);
+  const r = parseSensorData('HS:700% | T1:26.1C | Nodo:2');
+  assert.equal('humedadSuelo' in r, false);
+  assert.equal(r.temperaturaDS, 26.1);
+  assert.equal(r.nodo, 2);
+});
+
+test('rangos: presión 99 hPa y temperatura -127 °C (DS18B20 desconectado) se descartan', () => {
+  assert.deepEqual(parseSensorData('HS:40% | T1:-127.0C | P:99hPa'), { humedadSuelo: 40 });
+});
+
+test('límites incluidos: 0 % y 100 % son válidos', () => {
+  assert.equal(parseSensorData('HS:0%').humedadSuelo, 0);
+  assert.equal(parseSensorData('HS:100%').humedadSuelo, 100);
 });
