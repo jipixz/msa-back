@@ -729,6 +729,9 @@ function connectSerialPort() {
       // Solo listar puertos en el primer intento
       listAvailablePorts();
     }
+    // Sin esto scheduleSerialReconnect() ve isReconnecting=true, no programa nada y msa-back
+    // deja de intentar para siempre: la placa vuelve a conectarse y nadie abre el puerto.
+    isReconnecting = false;
     scheduleSerialReconnect();
     return;
   }
