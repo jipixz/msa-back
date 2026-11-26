@@ -30,6 +30,8 @@ test('el formato de fase 1 incluye el nodo en la misma línea', () => {
   for (const l of fase1) assert.equal(typeof parseSensorData(l).nodo, 'number', l);
 });
 
-test('la línea de métricas de radio no produce datos de sensores', () => {
-  for (const l of lineas.filter((x) => x.startsWith('RSSI:'))) assert.equal(parseSensorData(l), null);
+test('la línea de métricas de radio solo produce rssi y snr (ningún dato de sensores)', () => {
+  for (const l of lineas.filter((x) => x.startsWith('RSSI:'))) {
+    assert.deepEqual(Object.keys(parseSensorData(l)).sort(), ['rssi', 'snr']);
+  }
 });

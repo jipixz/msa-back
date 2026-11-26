@@ -170,6 +170,8 @@ try {
       lluvia: Number,
       rainDigital: Boolean, // Cambio de 'alerta' a 'rainDigital' (booleano)
       bateria: Number, // Voltaje de la batería del nodo (V), si el firmware lo manda
+      rssi: Number, // dBm con que el gateway recibió el paquete
+      snr: Number, // dB (relación señal/ruido del paquete)
       sensoresFallidos: { type: [String], default: undefined }, // sensores que no respondieron (Err del firmware)
       nodo: { type: Number, min: 0, max: 255, required: true }, // ID del nodo (0–255; antes 0–3 rechazaba el nodo 4 en adelante)
       fecha: { type: Date, default: Date.now },
@@ -777,13 +779,21 @@ function connectSerialPort() {
             if (parsedData.rainDigital) {
               console.log(`🌧️ LLUVIA detectada en nodo ${parsedData.nodo}:`, parsedData);
             }
-            Object.assign(sensorDataBuffer, parsedData);
-            lastSensorUpdate = Date.now();
-            const expectedFields = ['humedadSuelo', 'temperaturaDS', 'temperaturaBME', 'presion', 'humedadAire', 'luminosidad', 'lluvia', 'rainDigital', 'nodo'];
-            const bufferHasAllFields = expectedFields.every(field => Object.prototype.hasOwnProperty.call(sensorDataBuffer, field));
-            if (bufferHasAllFields) {
+            // El gateway manda "RSSI:…,SNR:…" en su propia línea justo después de cada paquete:
+            // se agrega a esa lectura y la cierra (antes se guardaba sin esperar y se perdía).
+            if (parsedData.rssi !== undefined) {
+              if (Object.keys(sensorDataBuffer).length === 0) continue;  // métricas sin paquete
+              Object.assign(sensorDataBuffer, parsedData);
+              await saveAccumulatedData();
+              continue;
+            }
+            // Un paquete nuevo de otro nodo antes del RSSI del anterior: se guarda el anterior
+            if (parsedData.nodo !== undefined && sensorDataBuffer.nodo !== undefined) {
               await saveAccumulatedData();
             }
+            Object.assign(sensorDataBuffer, parsedData);
+            lastSensorUpdate = Date.now();
+            // Si no llega el RSSI (gateway con firmware viejo), el temporizador guarda a los 5 s
           }
         }
       }

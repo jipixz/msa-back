@@ -27,8 +27,7 @@ test('valores "nan" de sensores fallidos se descartan y el resto se conserva', (
   }
 });
 
-test('claves desconocidas (Err, RSSI) se ignoran', () => {
-  assert.equal(parseSensorData('RSSI:-97.00,SNR:6.50'), null);
+test('Err no se guarda tal cual (se convierte en sensoresFallidos)', () => {
   assert.equal('Err' in (parseSensorData('HS:40% | Err:BME280') || {}), false);
 });
 
@@ -72,4 +71,10 @@ test('formato compacto del firmware (fases 2–4): sin unidades, RainBool 1/0, S
 test('batería (cableado 2 del firmware): Bat en volts, fuera de 2.5–4.5 V se descarta', () => {
   assert.equal(parseSensorData('HS:45|Nodo:3|Bat:3.91').bateria, 3.91);
   assert.equal('bateria' in parseSensorData('HS:45|Nodo:3|Bat:0.12'), false);
+});
+
+test('línea de radio del gateway: RSSI y SNR (fuera de rango se descarta)', () => {
+  assert.deepEqual(parseSensorData('RSSI:-9.00,SNR:4.75'), { rssi: -9, snr: 4.75 });
+  assert.deepEqual(parseSensorData('RSSI:-118.50,SNR:-12.25\r'), { rssi: -118.5, snr: -12.25 });
+  assert.equal(parseSensorData('RSSI:-400,SNR:4'), null);
 });
