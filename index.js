@@ -17,6 +17,7 @@ const notifier = require('./notifier');
 const { parseSensorData } = require('./lib/parse-sensor-data');
 const { safeReturnUrl } = require('./lib/access');
 const { validarPreferencias } = require('./lib/preferencias');
+const { esLecturaReal, sinSensores } = require('./lib/lectura-valida');
 
 // Log de variables de entorno al arranque (sin mostrar contraseñas)
 (function logEnv() {
@@ -169,6 +170,7 @@ try {
       lluvia: Number,
       rainDigital: Boolean, // Cambio de 'alerta' a 'rainDigital' (booleano)
       bateria: Number, // Voltaje de la batería del nodo (V), si el firmware lo manda
+      sensoresFallidos: { type: [String], default: undefined }, // sensores que no respondieron (Err del firmware)
       nodo: { type: Number, min: 0, max: 255, required: true }, // ID del nodo (0–255; antes 0–3 rechazaba el nodo 4 en adelante)
       fecha: { type: Date, default: Date.now },
       source: { type: String, default: 'real_sensor' },
@@ -610,23 +612,8 @@ let isReconnecting = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10; // Máximo 10 intentos antes de pausar
 
-// Función para detectar si los datos son reales o ficticios
-const isRealSensorData = (data) => {
-  // Verificar si los datos provienen de sensores reales
-  // Los datos ficticios tienen patrones aleatorios específicos
-  const hasAllRequiredFields = data.humedadSuelo !== undefined && 
-                              data.temperaturaBME !== undefined && 
-                              data.humedadAire !== undefined &&
-                              data.fecha !== undefined;
-  
-  // Verificar que no sean datos generados por generarDatosIniciales
-  const isNotDummy = !data.isDummy && data.source === "real_sensor" && !data.generated;
-  // Verificar que los valores estén en rangos realistas
-  const realisticRanges = data.humedadSuelo >= 0 && data.humedadSuelo <= 100 &&
-                         data.temperaturaBME >= -10 && data.temperaturaBME <= 50 &&
-                         data.humedadAire >= 0 && data.humedadAire <= 100;
-  return hasAllRequiredFields && isNotDummy && realisticRanges;
-};
+// ¿Lectura real (se guarda) o de prueba/sin sensores (solo en vivo)? Ver lib/lectura-valida.js
+const isRealSensorData = esLecturaReal;
 
 // Función para guardar datos acumulados
 const saveAccumulatedData = async () => {
@@ -652,7 +639,9 @@ const saveAccumulatedData = async () => {
       // Emitir el nuevo dato a todos los clientes conectados
       io.emit('nueva-lectura', { ...completeData, fecha: nuevaLectura.fecha });
     } else if (Humedad) {
-      console.log(`⚠️ Datos ficticios detectados - NO guardados en MongoDB`);
+      console.log(`⚠️ Lectura sin sensores o de prueba - NO guardada en MongoDB`);
+      // Nodo con todos los sensores digitales caídos (arnés desconectado): no se guarda, pero se avisa
+      if (sinSensores(completeData)) notifier.evaluate(completeData);
       console.log(`📊 Datos solo para visualización en tiempo real`);
       
       // Emitir datos para visualización pero no guardar en BD

@@ -13,8 +13,10 @@ const OPERATORS = {
 
 function evaluateCondition(reading, cond) {
   if (!cond || !cond.field) return false;
-  const value = reading[cond.field];
+  let value = reading[cond.field];
   if (value === undefined || value === null) return false;
+  // Listas (p. ej. sensoresFallidos): "es verdadero" = tiene al menos un elemento
+  if (Array.isArray(value) && (cond.op === 'is_true' || cond.op === 'is_false')) value = value.length > 0;
   const op = OPERATORS[cond.op];
   if (!op) return false;
   return op(value, cond.value);
@@ -44,6 +46,7 @@ function renderTemplate(template, reading) {
     if (v === undefined || v === null) return '';
     if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(1);
     if (v instanceof Date) return v.toISOString();
+    if (Array.isArray(v)) return v.join(', ');
     return String(v);
   });
 }

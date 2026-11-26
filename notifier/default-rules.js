@@ -141,5 +141,22 @@ module.exports = [
     },
     channels: ['ntfy'],
     cooldownMinutes: 180
+  },
+  {
+    key: 'sensor_sin_respuesta',
+    name: 'Sensor sin respuesta',
+    description: 'El nodo reportó sensores que no respondieron (campo Err del firmware). Las demás mediciones se guardan igual.',
+    enabled: true,
+    nodes: [],
+    match: 'all',
+    conditions: [{ field: 'sensoresFallidos', op: 'is_true' }],
+    message: {
+      title: '🛠️ Sensor sin respuesta — Nodo {{nodo}}',
+      body: 'No respondió: {{sensoresFallidos}}. El resto de las mediciones se guardó; revisa el cableado o el sensor.',
+      priority: 'default',
+      tags: ['wrench']
+    },
+    channels: ['ntfy', 'telegram'],
+    cooldownMinutes: 360
   }
 ];
